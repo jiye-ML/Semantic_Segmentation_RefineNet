@@ -9,77 +9,6 @@ slim = tf.contrib.slim
 
 class Augmentation():
 
-    # 对所有的x进行 num_cases中的一种操作， func定义该操作
-    @staticmethod
-    def apply_with_random_selector(x, func, num_cases):
-        """Computes func(x, sel), with sel sampled from [0...num_cases-1].
-        Args:
-          x: input Tensor.
-          func: Python function to apply.
-          num_cases: Python int32, number of cases to sample sel from.
-        Returns:
-          The result of func(x, sel), where func receives the value of the
-          selector as a python integer, but sel is sampled dynamically.
-        """
-        # 选择一种操作
-        sel = tf.random_uniform([], maxval=num_cases, dtype=tf.int32)
-        # 利用fnc操作x给选定值，然后融合结果
-        return control_flow_ops.merge(
-            [func(control_flow_ops.switch(x, tf.equal(sel, case))[1], case) for case in range(num_cases)])[0]
-
-    # 随机颜色增强
-    @staticmethod
-    def distort_color(image, color_ordering=0, fast_mode=True, scope=None):
-        """Distort the color of a Tensor image.
-        Each color distortion is non-commutative and thus ordering of the color ops
-        matters. Ideally we would randomly permute the ordering of the color ops.
-        Rather then adding that level of complication, we select a distinct ordering
-        of color ops for each preprocessing thread.
-        Args:
-          image: 3-D Tensor containing single image in [0, 1].
-          color_ordering: Python int, a type of distortion (valid values: 0-3).
-          fast_mode: Avoids slower ops (random_hue and random_contrast)
-          scope: Optional scope for name_scope.
-        Returns:
-          3-D Tensor color-distorted image on range [0, 1]
-        Raises:
-          ValueError: if color_ordering not in [0, 3]
-        """
-        with tf.name_scope(scope, 'distort_color', [image]):
-            if fast_mode:
-                if color_ordering == 0:
-                    image = tf.image.random_brightness(image, max_delta=32. / 255.)
-                    image = tf.image.random_saturation(image, lower=0.5, upper=1.5)
-                else:
-                    image = tf.image.random_saturation(image, lower=0.5, upper=1.5)
-                    image = tf.image.random_brightness(image, max_delta=32. / 255.)
-            else:
-                if color_ordering == 0:
-                    image = tf.image.random_brightness(image, max_delta=32. / 255.)
-                    image = tf.image.random_saturation(image, lower=0.5, upper=1.5)
-                    image = tf.image.random_hue(image, max_delta=0.2)
-                    image = tf.image.random_contrast(image, lower=0.5, upper=1.5)
-                elif color_ordering == 1:
-                    image = tf.image.random_saturation(image, lower=0.5, upper=1.5)
-                    image = tf.image.random_brightness(image, max_delta=32. / 255.)
-                    image = tf.image.random_contrast(image, lower=0.5, upper=1.5)
-                    image = tf.image.random_hue(image, max_delta=0.2)
-                elif color_ordering == 2:
-                    image = tf.image.random_contrast(image, lower=0.5, upper=1.5)
-                    image = tf.image.random_hue(image, max_delta=0.2)
-                    image = tf.image.random_brightness(image, max_delta=32. / 255.)
-                    image = tf.image.random_saturation(image, lower=0.5, upper=1.5)
-                elif color_ordering == 3:
-                    image = tf.image.random_hue(image, max_delta=0.2)
-                    image = tf.image.random_saturation(image, lower=0.5, upper=1.5)
-                    image = tf.image.random_contrast(image, lower=0.5, upper=1.5)
-                    image = tf.image.random_brightness(image, max_delta=32. / 255.)
-                else:
-                    raise ValueError('color_ordering must be in [0, 3]')
-
-            # The random_* ops do not necessarily clamp.
-            return tf.clip_by_value(image, 0.0, 1.0)
-
     # 1/2概率对数据进行反转
     @staticmethod
     def flip_randomly_left_right_image_with_annotation(image_tensor, annotation_tensor):
@@ -126,8 +55,8 @@ class Augmentation():
         # https://github.com/tensorflow/models/blob/master/slim/preprocessing/inception_preprocessing.py#L224
         # Most probably the inception models were trainined using this color augmentation:
         # https://github.com/tensorflow/models/tree/master/slim#pre-trained-models
-        distorted_image = Augmentation.apply_with_random_selector(img_float_zero_one_range,
-                                                     lambda x, ordering: Augmentation.distort_color(x, ordering,
+        distorted_image = Augmentation._apply_with_random_selector(img_float_zero_one_range,
+                                                     lambda x, ordering: Augmentation._distort_color(x, ordering,
                                                                                        fast_mode=fast_mode),
                                                      num_cases=4)
 
@@ -215,19 +144,90 @@ class Augmentation():
         resized_img = tf.squeeze(resized_img, axis=0)
         resized_annotation = tf.squeeze(resized_annotation, axis=0)
 
-        # Shift all the classes by one -- to be able to differentiate
-        # between zeros representing padded values and zeros representing
-        # a particular semantic class.
+        # 标签向后移一位，因为后面会用0补边，0是一个特殊的标签
         annotation_shifted_classes = resized_annotation + 1
 
         cropped_padded_img = tf.image.resize_image_with_crop_or_pad(resized_img, output_shape[0], output_shape[1])
 
-        cropped_padded_annotation = tf.image.resize_image_with_crop_or_pad(annotation_shifted_classes, output_shape[0]//4, output_shape[1]//4)
+        cropped_padded_annotation = tf.image.resize_image_with_crop_or_pad(annotation_shifted_classes,
+                                                                           output_shape[0], output_shape[1])
 
         # 将0变为255, 其他标签往前移一位
         annotation_additional_mask_out = tf.to_int32(tf.equal(cropped_padded_annotation, 0)) * (mask_out_number + 1)
+        # 其他标签-1， 0标签+255  这样得到的补边后的是255补的， 其他标签不变
         cropped_padded_annotation = cropped_padded_annotation + annotation_additional_mask_out - 1
 
         return cropped_padded_img, cropped_padded_annotation
+
+    # 对所有的x进行 num_cases中的一种操作， func定义该操作
+    @staticmethod
+    def _apply_with_random_selector(x, func, num_cases):
+        """Computes func(x, sel), with sel sampled from [0...num_cases-1].
+        Args:
+          x: input Tensor.
+          func: Python function to apply.
+          num_cases: Python int32, number of cases to sample sel from.
+        Returns:
+          The result of func(x, sel), where func receives the value of the
+          selector as a python integer, but sel is sampled dynamically.
+        """
+        # 选择一种操作
+        sel = tf.random_uniform([], maxval=num_cases, dtype=tf.int32)
+        # 利用fnc操作x给选定值，然后融合结果
+        return control_flow_ops.merge(
+            [func(control_flow_ops.switch(x, tf.equal(sel, case))[1], case) for case in range(num_cases)])[0]
+
+    # 随机颜色增强
+    @staticmethod
+    def _distort_color(image, color_ordering=0, fast_mode=True, scope=None):
+        """Distort the color of a Tensor image.
+        Each color distortion is non-commutative and thus ordering of the color ops
+        matters. Ideally we would randomly permute the ordering of the color ops.
+        Rather then adding that level of complication, we select a distinct ordering
+        of color ops for each preprocessing thread.
+        Args:
+          image: 3-D Tensor containing single image in [0, 1].
+          color_ordering: Python int, a type of distortion (valid values: 0-3).
+          fast_mode: Avoids slower ops (random_hue and random_contrast)
+          scope: Optional scope for name_scope.
+        Returns:
+          3-D Tensor color-distorted image on range [0, 1]
+        Raises:
+          ValueError: if color_ordering not in [0, 3]
+        """
+        with tf.name_scope(scope, 'distort_color', [image]):
+            if fast_mode:
+                if color_ordering == 0:
+                    image = tf.image.random_brightness(image, max_delta=32. / 255.)
+                    image = tf.image.random_saturation(image, lower=0.5, upper=1.5)
+                else:
+                    image = tf.image.random_saturation(image, lower=0.5, upper=1.5)
+                    image = tf.image.random_brightness(image, max_delta=32. / 255.)
+            else:
+                if color_ordering == 0:
+                    image = tf.image.random_brightness(image, max_delta=32. / 255.)
+                    image = tf.image.random_saturation(image, lower=0.5, upper=1.5)
+                    image = tf.image.random_hue(image, max_delta=0.2)
+                    image = tf.image.random_contrast(image, lower=0.5, upper=1.5)
+                elif color_ordering == 1:
+                    image = tf.image.random_saturation(image, lower=0.5, upper=1.5)
+                    image = tf.image.random_brightness(image, max_delta=32. / 255.)
+                    image = tf.image.random_contrast(image, lower=0.5, upper=1.5)
+                    image = tf.image.random_hue(image, max_delta=0.2)
+                elif color_ordering == 2:
+                    image = tf.image.random_contrast(image, lower=0.5, upper=1.5)
+                    image = tf.image.random_hue(image, max_delta=0.2)
+                    image = tf.image.random_brightness(image, max_delta=32. / 255.)
+                    image = tf.image.random_saturation(image, lower=0.5, upper=1.5)
+                elif color_ordering == 3:
+                    image = tf.image.random_hue(image, max_delta=0.2)
+                    image = tf.image.random_saturation(image, lower=0.5, upper=1.5)
+                    image = tf.image.random_contrast(image, lower=0.5, upper=1.5)
+                    image = tf.image.random_brightness(image, max_delta=32. / 255.)
+                else:
+                    raise ValueError('color_ordering must be in [0, 3]')
+
+            # The random_* ops do not necessarily clamp.
+            return tf.clip_by_value(image, 0.0, 1.0)
 
     pass

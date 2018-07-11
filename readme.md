@@ -3,6 +3,17 @@
 * 使用ResNet作为特征提取器
 * [paper](https://github.com/jiye-ML/Semantic_Segmentation_Review.git)
 
+
+### 文件部署
+* ResNetV1： 残差网络
+* RefineNet: 
+* Augmentation: 数据增强
+* Data： 包含voc数据从图片转换为tfrecords形式的类和voc数据分装类
+    * 注意先要对原始图片进行
+* Train: 训练
+* Test： 测试
+* Predict： 预测
+
 ## prepare
 - download the pretrain model of resnet_v1_101.ckpt, you can download it from [here](https://github.com/tensorflow/models/tree/master/slim)
 - download the [pascal voc dataset](http://host.robots.ox.ac.uk/pascal/VOC/voc2012/)
@@ -21,5 +32,6 @@
 - [ ] Complete realization of refinenet model
 - [ ] test on pascal voc, give the IoU result
 - [ ] training on other datasets
+
 
 * [参考github](https://github.com/eragonruan/refinenet-image-segmentation)

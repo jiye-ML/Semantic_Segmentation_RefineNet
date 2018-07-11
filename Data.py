@@ -8,45 +8,92 @@ from Augmentation import Augmentation
 from Tools import Tools
 
 
+
+
+def pascal_segmentation_lut():
+    """Return look-up table with number and correspondng class names
+    for PASCAL VOC segmentation dataset. Two special classes are: 0 -
+    background and 255 - ambigious region. All others are numerated from
+    1 to 20.
+
+    Returns
+    -------
+    classes_lut : dict
+        look-up table with number and correspondng class names
+    """
+
+    class_names = ['background', 'aeroplane', 'bicycle', 'bird', 'boat',
+                   'bottle', 'bus', 'car', 'cat', 'chair', 'cow', 'diningtable',
+                   'dog', 'horse', 'motorbike', 'person', 'potted-plant',
+                   'sheep', 'sofa', 'train', 'tv/monitor', 'ambigious']
+
+    classes_lut = list(enumerate(class_names[:-1]))
+
+    # 加入 255表示不确定类别
+    classes_lut.append((255, class_names[-1]))
+
+    return dict(classes_lut)
+
+
 class PascalVocData(object):
 
-    def __init__(self, class_number, image_height, image_width, batch_size, training_data_path, is_training=True):
+    def __init__(self, conf):
+        # 配置文件
+        self.conf = conf
         # 数据形式
-        self.image_height = image_height
-        self.image_width = image_width
+        self.image_height = self.conf.train_size
+        self.image_width = self.conf.train_size
+        self.num_classes = self.conf.num_classes
+        self.batch_size = self.conf.batch_size
         self.image_channel = 3
         self.label_channel = 1
-        self.class_number = class_number
-        self.batch_size = batch_size
 
-        # 加载标签颜色
-        self.class_labels = self._pascal_segmentation_lut().keys()
-        with open('data/color_map', 'rb') as f:
-            self.color_map = pickle.load(f, encoding='latin-1')
+        # colour map
+        self.color_map = [(0, 0, 0)
+                         # 0=background
+            , (128, 0, 0), (0, 128, 0), (128, 128, 0), (0, 0, 128), (128, 0, 128)
+                         # 1=aeroplane, 2=bicycle, 3=bird, 4=boat, 5=bottle
+            , (0, 128, 128), (128, 128, 128), (64, 0, 0), (192, 0, 0), (64, 128, 0)
+                         # 6=bus, 7=car, 8=cat, 9=chair, 10=cow
+            , (192, 128, 0), (64, 0, 128), (192, 0, 128), (64, 128, 128), (192, 128, 128)
+                         # 11=diningtable, 12=dog, 13=horse, 14=motorbike, 15=person
+            , (0, 64, 0), (128, 64, 0), (0, 192, 0), (128, 192, 0), (0, 64, 128)]
 
         # 数据
-        filename_queue = tf.train.string_input_producer([training_data_path], num_epochs=1000)
+        filename_queue = tf.train.string_input_producer([self.conf.data_path], num_epochs=1000)
         image_op, annotation_op = PacalVocToTfrecords.read_tfrecord_and_decode_into_image_annotation_pair_tensors(filename_queue)
-        # 数据增强
-        self._image_batch_op = None
-        self._annotation_batch_op = None
 
-        image_op, annotation_op = Augmentation.flip_randomly_left_right_image_with_annotation(image_op, annotation_op)
-
-        resized_image, resized_annotation = Augmentation.scale_randomly_image_with_annotation_with_fixed_size_output(
-            image_op, annotation_op, [self.image_height, self.image_width])
-        resized_annotation = tf.squeeze(resized_annotation)
-
-        self._image_batch_op, self._annotation_batch_op = tf.train.shuffle_batch([resized_image, resized_annotation],
-                                                                                 batch_size=self.batch_size,
-                                                                                 capacity=2000,
-                                                                                 num_threads=32,
-                                                                                 min_after_dequeue=500)
+        # 训练阶段数据增强， 测试阶段数据不增强
+        self._image_batch_op, self._annotation_batch_op = None, None
+        if not self.conf.is_training:
+            # batch方法需要明确
+            resized_image, resized_annotation = Augmentation.scale_randomly_image_with_annotation_with_fixed_size_output(
+                image_op, annotation_op, [self.image_height, self.image_width],
+                min_relative_random_scale_change=1,
+                max_realtive_random_scale_change=1.00001)
+            resized_image = tf.cast(resized_image, tf.float32)
+            resized_annotation = tf.cast(resized_annotation, tf.uint8)
+            self._image_batch_op, self._annotation_batch_op = tf.train.batch([resized_image, resized_annotation],
+                                                                             batch_size = self.batch_size,
+                                                                             num_threads = self.batch_size)
+        else:
+            # 数据增强
+            image_op, annotation_op = Augmentation.flip_randomly_left_right_image_with_annotation(image_op, annotation_op)
+            image_op = Augmentation.distort_randomly_image_color(image_op)
+            resized_image, resized_annotation = Augmentation.scale_randomly_image_with_annotation_with_fixed_size_output(
+                image_op, annotation_op, [self.image_height, self.image_width])
+            resized_annotation = tf.cast(resized_annotation, tf.uint8)
+            self._image_batch_op, self._annotation_batch_op = tf.train.shuffle_batch([resized_image, resized_annotation],
+                                                                                     batch_size=self.batch_size,
+                                                                                     capacity=500,
+                                                                                     num_threads=self.batch_size,
+                                                                                     min_after_dequeue=100)
+            self._image_batch_op = self._mean_image_subtraction(self._image_batch_op)
         pass
 
     # 获得下一批数据
     def get_next_data(self):
-        return [self._mean_image_subtraction(self._image_batch_op), self._annotation_batch_op]
+        return self._image_batch_op, self._annotation_batch_op
 
     # 减去均值
     def _mean_image_subtraction(self, images, means = [123.68, 116.78, 103.94]):
@@ -58,31 +105,6 @@ class PascalVocData(object):
         for i in range(num_channels):
             channels[i] -= means[i]
         return tf.concat(axis=3, values=channels)
-
-
-    def _pascal_segmentation_lut(self):
-        """Return look-up table with number and correspondng class names
-        for PASCAL VOC segmentation dataset. Two special classes are: 0 -
-        background and 255 - ambigious region. All others are numerated from
-        1 to 20.
-
-        Returns
-        -------
-        classes_lut : dict
-            look-up table with number and correspondng class names
-        """
-
-        class_names = ['background', 'aeroplane', 'bicycle', 'bird', 'boat',
-                       'bottle', 'bus', 'car', 'cat', 'chair', 'cow', 'diningtable',
-                       'dog', 'horse', 'motorbike', 'person', 'potted-plant',
-                       'sheep', 'sofa', 'train', 'tv/monitor', 'ambigious']
-
-        classes_lut = list(enumerate(class_names[:-1]))
-
-        # 加入 255表示不确定类别
-        classes_lut.append((255, class_names[-1]))
-
-        return dict(classes_lut)
 
     pass
 
@@ -192,7 +214,7 @@ class PacalVocToTfrecords:
     def _get_pascal_segmentation_image_annotation_filenames_pairs(self):
 
         pascal_relative_images_folder = 'JPEGImages'
-        pascal_relative_class_annotations_folder = 'SegmentationClass'
+        pascal_relative_class_annotations_folder = 'SegmentationClassConverted'
 
         images_extention = 'jpg'
         annotations_extention = 'png'
@@ -235,7 +257,7 @@ class PacalVocToTfrecords:
     def _get_pascal_selected_image_annotation_filenames_pairs(self, pascal_root, selected_names):
 
         pascal_relative_images_folder = 'JPEGImages'
-        pascal_relative_class_annotations_folder = 'SegmentationClass'
+        pascal_relative_class_annotations_folder = 'SegmentationClassConverted'
 
         images_extention = 'jpg'
         annotations_extention = 'png'
@@ -293,8 +315,6 @@ class PacalVocToTfrecords:
     pass
 
 
-
-
 if __name__ == '__main__':
 
     '''
@@ -303,3 +323,20 @@ if __name__ == '__main__':
     # 得到 (image, annotation) list (filename.jpg, filename.png)
     PacalVocToTfrecords()
 
+    # from Test import configure
+    #
+    # data = PascalVocData(conf=configure())
+    # with tf.Session() as sess:
+    #
+    #     sess.run([tf.global_variables_initializer(), tf.local_variables_initializer()])
+    #
+    #     coord = tf.train.Coordinator()
+    #     threads = tf.train.start_queue_runners(coord=coord, sess=sess)
+    #
+    #     image, label = sess.run(data.get_next_data())
+    #     print(label)
+    #
+    #     coord.request_stop()
+    #     coord.join(threads)
+
+    # print()

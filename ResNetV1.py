@@ -53,13 +53,18 @@ class ResNetV1:
 
     # 残差网络中使用的参数封装
     @staticmethod
-    def resnet_arg_scope(weight_decay=0.0001, batch_norm_decay=0.997, batch_norm_epsilon=1e-5, batch_norm_scale=True):
+    def resnet_arg_scope(weight_decay=0.0001,
+                         batch_norm_decay=0.997,
+                         batch_norm_epsilon=1e-5,
+                         batch_norm_scale=True):
         batch_norm_params = {'decay': batch_norm_decay, 'epsilon': batch_norm_epsilon,
                              'scale': batch_norm_scale, 'updates_collections': tf.GraphKeys.UPDATE_OPS}
         with slim.arg_scope([slim.conv2d],
                             weights_regularizer=slim.l2_regularizer(weight_decay),
                             weights_initializer=slim.variance_scaling_initializer(),
-                            activation_fn=tf.nn.relu, normalizer_fn=slim.batch_norm, normalizer_params=batch_norm_params):
+                            activation_fn=tf.nn.relu,
+                            normalizer_fn=slim.batch_norm,
+                            normalizer_params=batch_norm_params):
             with slim.arg_scope([slim.batch_norm], **batch_norm_params):
                 with slim.arg_scope([slim.max_pool2d], padding='SAME') as arg_sc:
                     return arg_sc
@@ -133,7 +138,8 @@ class ResNetV1:
         """
         with tf.variable_scope(self.scope, 'resnet_v1', [self.inputs], reuse=self.reuse) as sc:
             end_points_collection = sc.name + '_end_points'
-            with slim.arg_scope([slim.conv2d, self.bottleneck, self.stack_blocks_dense], outputs_collections=end_points_collection):
+            with slim.arg_scope([slim.conv2d, self.bottleneck, self.stack_blocks_dense],
+                                outputs_collections=end_points_collection):
                 with slim.arg_scope([slim.batch_norm], is_training=self.is_training):
                     net = self.inputs  # 3x512x512x3
                     # 基本块
@@ -167,7 +173,7 @@ class ResNetV1:
                 shortcut = slim.conv2d(inputs, depth, [1, 1], stride=stride, activation_fn=None, scope='shortcut')  # 3x128x128x256
             residual = slim.conv2d(inputs, depth_bottleneck, [1, 1], stride=1, scope='conv1')  # 3x128x128x64
             residual = self.conv2d_same(residual, depth_bottleneck, 3, stride, rate=rate, scope='conv2')  # 3x128x128x64
-            residual = slim.conv2d(residual, depth, [1, 1], stride=1, scope='conv3')  # 3x128x128x256
+            residual = slim.conv2d(residual, depth, [1, 1], activation_fn=None, stride=1, scope='conv3')  # 3x128x128x256
 
             output = tf.nn.relu(shortcut + residual)
             return utils.collect_named_outputs(outputs_collections, sc.original_name_scope, output)
@@ -182,14 +188,16 @@ class ResNetV1:
     # SAME 补边的卷积
     def conv2d_same(self, inputs, num_outputs, kernel_size, stride, rate=1, scope=None):
         if stride == 1:
-            return slim.conv2d(inputs, num_outputs, kernel_size, stride=1, rate=rate, padding='SAME', scope=scope)
+            return slim.conv2d(inputs, num_outputs, kernel_size, stride=1,
+                               rate=rate, padding='SAME', scope=scope)
         else:
             kernel_size_effective = kernel_size + (kernel_size - 1) * (rate - 1)
             pad_total = kernel_size_effective - 1
             pad_beg = pad_total // 2
             pad_end = pad_total - pad_beg
             inputs = tf.pad(inputs, [[0, 0], [pad_beg, pad_end], [pad_beg, pad_end], [0, 0]])
-            return slim.conv2d(inputs, num_outputs, kernel_size, stride=stride, rate=rate, padding='VALID', scope=scope)
+            return slim.conv2d(inputs, num_outputs, kernel_size,
+                               stride=stride, rate=rate, padding='VALID', scope=scope)
         pass
 
     # 密集堆叠每一层，当步长累计超过输出步长的时候，使用空洞卷积代替下采样
@@ -210,10 +218,16 @@ class ResNetV1:
                         unit_depth, unit_depth_bottleneck, unit_stride = unit
                         # 如果我们达到了output_stride目标，我们需要使用空洞卷积，stride=1在接下来的层中， rate=当前步长*rate在接下来的层中
                         if self.output_stride is not None and current_stride == self.output_stride:
-                            net = block.unit_fn(net, depth=unit_depth, depth_bottleneck=unit_depth_bottleneck, stride=1, rate=rate)
+                            net = block.unit_fn(net,
+                                                depth=unit_depth,
+                                                depth_bottleneck=unit_depth_bottleneck,
+                                                stride=1, rate=rate)
                             rate *= unit_stride
                         else:
-                            net = block.unit_fn(net, depth=unit_depth, depth_bottleneck=unit_depth_bottleneck, stride=unit_stride, rate=1)
+                            net = block.unit_fn(net,
+                                                depth=unit_depth,
+                                                depth_bottleneck=unit_depth_bottleneck,
+                                                stride=unit_stride, rate=1)
                             current_stride *= unit_stride
                 print(sc.name, net.shape)
                 # 将当前输出输出加入到集合中，然后给当前集合别名
